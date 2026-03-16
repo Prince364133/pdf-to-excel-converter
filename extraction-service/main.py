@@ -6,6 +6,10 @@ import os
 import json
 import shutil
 import tempfile
+import warnings
+
+# Suppress warnings from Camelot/pdfminer about image-based pages
+warnings.filterwarnings("ignore", category=UserWarning, module="camelot")
 
 app = FastAPI(title="TimeLoop PDF Extraction Service")
 
@@ -22,41 +26,59 @@ async def extract_tables(file: UploadFile = File(...)):
 
     try:
         data = []
+        is_image_based = False
         
-        # Strategy 1: Camelot (Preferred for lattice-style tables)
-        # Note: Camelot can be picky about Ghostscript installation.
-        # We'll try 'lattice' first, then 'stream'.
-        try:
-            tables = camelot.read_pdf(tmp_path, pages='all', flavor='lattice')
-            if len(tables) == 0:
-                tables = camelot.read_pdf(tmp_path, pages='all', flavor='stream')
+        # Check if PDF has text content using pdfplumber
+        with pdfplumber.open(tmp_path) as pdf:
+            text_chunks = []
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    text_chunks.append(str(text))
             
-            for table in tables:
-                df = table.df
-                # Simple cleanup: use first row as header if it looks like one
-                # For this specific task, we expect specific columns
-                records = json.loads(df.to_json(orient='records'))
-                data.extend(records)
-        except Exception as e:
-            print(f"Camelot failed: {e}")
-            # Strategy 2: pdfplumber fallback
+            text_content = "".join(text_chunks)
+            if not text_content or not text_content.strip():
+                is_image_based = True
+
+        # Strategy 1: Camelot (Preferred for lattice-style tables)
+        if not is_image_based:
+            try:
+                tables = camelot.read_pdf(tmp_path, pages='all', flavor='lattice')
+                if len(tables) == 0:
+                    tables = camelot.read_pdf(tmp_path, pages='all', flavor='stream')
+                
+                for table in tables:
+                    df = table.df
+                    records = json.loads(df.to_json(orient='records'))
+                    data.extend(records)
+            except Exception as e:
+                print(f"Camelot failed: {e}")
+        
+        # Strategy 2: pdfplumber fallback (always try if camelot found nothing or failed)
+        if not data:
             with pdfplumber.open(tmp_path) as pdf:
                 for page in pdf.pages:
                     pdf_tables = page.extract_tables()
                     for table in pdf_tables:
                         if table:
+                            # Filter out empty rows/headers
                             df = pd.DataFrame(table[1:], columns=table[0])
-                            records = json.loads(df.to_json(orient='records'))
-                            data.extend(records)
+                            if not df.empty:
+                                records = json.loads(df.to_json(orient='records'))
+                                data.extend(records)
+
+        if not data and is_image_based:
+            return {
+                "filename": file.filename, 
+                "data": [], 
+                "warning": "This PDF appears to be image-based. Text extraction requires OCR which is not yet enabled.",
+                "type": "image-based"
+            }
 
         if not data:
             raise HTTPException(status_code=422, detail="No tables detected in the uploaded PDF")
-
-        # Map the columns to the expected structure if possible
-        # Serial No | Reference ID | Plate Number | Description | RFID Status
-        # We'll return the raw data and let the backend/frontend handle mapping if they don't match exactly.
         
-        return {"filename": file.filename, "data": data}
+        return {"filename": file.filename, "data": data, "is_image_based": is_image_based}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -6,3 +6,6 @@ pymupdf
 pandas
 python-multipart
 opencv-python-headless
+python-bidi >= 0.6.7
+setuptools
+wheel

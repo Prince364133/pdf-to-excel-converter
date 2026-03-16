@@ -1,8 +1,8 @@
 fastapi
 uvicorn
-camelot-py[cv]
-pdfplumber
+img2table[easyocr]
+easyocr
+pymupdf
 pandas
 python-multipart
-opencv-python
-Ghostscript
+opencv-python-headless

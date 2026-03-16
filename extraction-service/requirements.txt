@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+camelot-py[cv]
+pdfplumber
+pandas
+python-multipart
+opencv-python
+Ghostscript
